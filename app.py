@@ -9,7 +9,7 @@ from openai import OpenAI
 load_dotenv()
 
 
-def build_prompt(customer_message: str, user_reply_turkish: str, tone: str) -> str:
+def build_analyze_prompt(customer_message: str) -> str:
     return f"""
 You are a multilingual customer support assistant.
 
@@ -17,30 +17,48 @@ Task:
 1) Detect the language of the customer's message.
 2) Translate the customer message into Turkish.
 3) Provide a short Turkish summary.
-4) If a Turkish draft reply is provided, improve it so it is clear and professional.
-5) If no draft is provided, create a suitable Turkish reply from scratch.
-6) Translate the final Turkish reply into the customer's original language in the selected tone.
-
-Tone options:
-- formal
-- informal
-- neutral
-
-Selected tone: {tone}
 
 Return ONLY valid JSON with this schema:
 {{
   "detected_language": "string",
   "customer_message_tr": "string",
-  "summary_tr": "string",
-  "reply_tr_improved": "string",
-  "reply_in_customer_language": "string"
+  "summary_tr": "string"
 }}
 
 Customer message:
 \"\"\"{customer_message}\"\"\"
+"""
 
-Draft reply in Turkish:
+
+def build_reply_prompt(
+    customer_message: str,
+    customer_message_tr: str,
+    user_reply_turkish: str,
+    tone: str,
+) -> str:
+    return f"""
+You are a multilingual customer support assistant.
+
+Task:
+1) Use the original customer message and Turkish translation context.
+2) If a Turkish draft reply is provided, improve it professionally.
+3) If no draft is provided, create a suitable Turkish customer reply from scratch.
+4) Translate the final Turkish reply into the customer's original language.
+5) Apply this tone: {tone}.
+
+Return ONLY valid JSON with this schema:
+{{
+  "reply_tr_final": "string",
+  "reply_in_customer_language": "string"
+}}
+
+Original customer message:
+\"\"\"{customer_message}\"\"\"
+
+Customer message in Turkish:
+\"\"\"{customer_message_tr}\"\"\"
+
+Draft reply in Turkish (optional):
 \"\"\"{user_reply_turkish}\"\"\"
 """
 
@@ -51,9 +69,8 @@ def get_api_key() -> str:
     return (secret_key or env_key).strip()
 
 
-def ask_ai(api_key: str, customer_message: str, user_reply_turkish: str, tone: str) -> dict:
+def ask_ai(api_key: str, prompt: str) -> dict:
     client = OpenAI(api_key=api_key)
-    prompt = build_prompt(customer_message, user_reply_turkish, tone)
 
     response = client.chat.completions.create(
         model="gpt-4o-mini",
@@ -78,7 +95,7 @@ def main() -> None:
     api_key = get_api_key()
 
     tone = st.selectbox(
-        "Yanıt tonu",
+        "Yanıt tonu (cevap üretiminde kullanılır)",
         options=["formal", "neutral", "informal"],
         index=0,
     )
@@ -95,41 +112,68 @@ def main() -> None:
         height=140,
     )
 
-    run_btn = st.button("Çevir ve Cevap Üret", type="primary")
+    translate_btn = st.button("1) Önce Çevir", type="primary")
+    generate_btn = st.button("2) Sonra Cevap Üret")
 
-    if run_btn:
+    if translate_btn:
         if not api_key:
             st.error("OPENAI_API_KEY bulunamadı. Streamlit Secrets veya .env içine ekleyin.")
         elif not customer_message.strip():
             st.error("Lütfen müşteriden gelen mesajı yazın.")
         else:
-            with st.spinner("AI yanıt oluşturuyor..."):
+            with st.spinner("Mesaj çevriliyor..."):
                 try:
-                    result = ask_ai(
-                        api_key=api_key.strip(),
-                        customer_message=customer_message.strip(),
-                        user_reply_turkish=user_reply_turkish.strip(),
-                        tone=tone,
-                    )
-
-                    st.success("Hazır.")
-                    st.subheader("Dil Tespiti")
-                    st.write(result.get("detected_language", "-"))
-
-                    st.subheader("Müşteri Mesajı (Türkçe)")
-                    st.write(result.get("customer_message_tr", "-"))
-
-                    st.subheader("Kısa Özet (TR)")
-                    st.write(result.get("summary_tr", "-"))
-
-                    st.subheader("Geliştirilmiş Cevap (TR)")
-                    st.write(result.get("reply_tr_improved", "-"))
-
-                    st.subheader("Müşteri Dilinde Gönderilecek Cevap")
-                    st.code(result.get("reply_in_customer_language", "-"), language=None)
+                    analysis = ask_ai(api_key=api_key.strip(), prompt=build_analyze_prompt(customer_message.strip()))
+                    st.session_state["analysis"] = analysis
+                    st.session_state["last_customer_message"] = customer_message.strip()
+                    st.session_state.pop("reply", None)
+                    st.success("Çeviri tamamlandı.")
 
                 except Exception as exc:
                     st.error(f"Hata oluştu: {exc}")
+
+    analysis = st.session_state.get("analysis")
+    if analysis:
+        st.subheader("Dil Tespiti")
+        st.write(analysis.get("detected_language", "-"))
+
+        st.subheader("Müşteri Mesajı (Türkçe)")
+        st.write(analysis.get("customer_message_tr", "-"))
+
+        st.subheader("Kısa Özet (TR)")
+        st.write(analysis.get("summary_tr", "-"))
+
+    if generate_btn:
+        if not api_key:
+            st.error("OPENAI_API_KEY bulunamadı. Streamlit Secrets veya .env içine ekleyin.")
+        elif not customer_message.strip():
+            st.error("Lütfen müşteriden gelen mesajı yazın.")
+        elif not analysis or st.session_state.get("last_customer_message") != customer_message.strip():
+            st.error("Önce güncel mesaj için '1) Önce Çevir' butonuna basın.")
+        else:
+            with st.spinner("Cevap oluşturuluyor..."):
+                try:
+                    reply = ask_ai(
+                        api_key=api_key.strip(),
+                        prompt=build_reply_prompt(
+                            customer_message=customer_message.strip(),
+                            customer_message_tr=analysis.get("customer_message_tr", ""),
+                            user_reply_turkish=user_reply_turkish.strip(),
+                            tone=tone,
+                        ),
+                    )
+                    st.session_state["reply"] = reply
+                    st.success("Cevap hazır.")
+                except Exception as exc:
+                    st.error(f"Hata oluştu: {exc}")
+
+    reply = st.session_state.get("reply")
+    if reply:
+        st.subheader("Müşteri Dilinde Gönderilecek Cevap")
+        st.code(reply.get("reply_in_customer_language", "-"), language=None)
+
+        st.subheader("Türkçe Karşılığı")
+        st.write(reply.get("reply_tr_final", "-"))
 
 
 if __name__ == "__main__":
