@@ -17,8 +17,9 @@ Task:
 1) Detect the language of the customer's message.
 2) Translate the customer message into Turkish.
 3) Provide a short Turkish summary.
-4) Improve the drafted Turkish reply so it is clear and professional for customer communication.
-5) Translate the improved reply into the customer's original language in the selected tone.
+4) If a Turkish draft reply is provided, improve it so it is clear and professional.
+5) If no draft is provided, create a suitable Turkish reply from scratch.
+6) Translate the final Turkish reply into the customer's original language in the selected tone.
 
 Tone options:
 - formal
@@ -44,6 +45,12 @@ Draft reply in Turkish:
 """
 
 
+def get_api_key() -> str:
+    secret_key = st.secrets.get("OPENAI_API_KEY", "")
+    env_key = os.getenv("OPENAI_API_KEY", "")
+    return (secret_key or env_key).strip()
+
+
 def ask_ai(api_key: str, customer_message: str, user_reply_turkish: str, tone: str) -> dict:
     client = OpenAI(api_key=api_key)
     prompt = build_prompt(customer_message, user_reply_turkish, tone)
@@ -67,8 +74,8 @@ def main() -> None:
     st.title("Cheviri AI")
     st.caption("Yabancı dilde müşteri mesajlarını anla, Türkçe cevap hazırla, otomatik geri çevir.")
 
-    default_api_key = os.getenv("OPENAI_API_KEY", "")
-    api_key = st.text_input("OpenAI API Key", value=default_api_key, type="password")
+    st.info("API key Streamlit secrets/.env'den okunur. Ekranda key girmen gerekmez.")
+    api_key = get_api_key()
 
     tone = st.selectbox(
         "Yanıt tonu",
@@ -83,8 +90,8 @@ def main() -> None:
     )
 
     user_reply_turkish = st.text_area(
-        "Senin Türkçe cevap taslağın",
-        placeholder="Örn: Merhaba, yaşadığınız gecikme için üzgünüz. Sipariş numaranızı paylaşır mısınız?",
+        "Senin Türkçe cevap taslağın (opsiyonel)",
+        placeholder="Boş bırakabilirsin. Dilersen taslak yaz: Merhaba, yaşadığınız gecikme için üzgünüz...",
         height=140,
     )
 
@@ -92,11 +99,9 @@ def main() -> None:
 
     if run_btn:
         if not api_key:
-            st.error("Lütfen OpenAI API Key girin.")
+            st.error("OPENAI_API_KEY bulunamadı. Streamlit Secrets veya .env içine ekleyin.")
         elif not customer_message.strip():
             st.error("Lütfen müşteriden gelen mesajı yazın.")
-        elif not user_reply_turkish.strip():
-            st.error("Lütfen Türkçe cevap taslağınızı yazın.")
         else:
             with st.spinner("AI yanıt oluşturuyor..."):
                 try:
