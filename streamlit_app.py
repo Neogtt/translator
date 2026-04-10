@@ -1,1 +1,4 @@
-import app
+from app import main
+
+
+main()
